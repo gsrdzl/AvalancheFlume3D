@@ -1,0 +1,17 @@
+20358       Number of particles.
+15.0        Flume and width.
+75.0        Hopper height.
+0.17979588  Minimum sphere radius.
+0.17979588  Maximum sphere radius.
+10.0        Initial velocity.
+1.0e-6      Time step.
+0.6         Particle-wall coefficient of restitution.
+0.4         Particle-wall coefficient of friction.
+0.6         Particle-particle coefficient of restitution.
+0.4         Particle-particle coefficient of friction.
+1.0e-4      Collision time.
+140.0       Flume length.
+35.0        Flume tilt in degrees.
+9           Number of tagged particles in cells.
+1           Print flag.
+All values are in cgs units.

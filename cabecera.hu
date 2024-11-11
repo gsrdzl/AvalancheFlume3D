@@ -1,0 +1,157 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+/**********/
+#define PI         3.1415926535897932
+#define DEBUG      1
+#define RAN        rannew64
+#define GRAV       981.0
+#define GYR        4.4494897427831781 /* = 2 + sqrt(6); Gyration radius for a unit tetrahedron. */
+#define SPH_FACT   4.188790204786391  /* = 4*PI/3 */
+#define ROOT2      1.414213562373095
+#define DRAG       1.895e-3           /* = 1.5*PI*rho_air*c_D; rho_air = 1.225e-3 g cm^-3 */
+#define INTER_FLAG 1
+#define HOP_HEIGHT 25.0
+#define HOP_WIDTH  15.0
+#define YFUNNEL    30.0
+#define LFUNNEL    70.0
+#define YHOP_L      7.5               /* = (YFUNNEL - HOP_WIDTH)/2 */
+#define YHOP_R     22.5               /* = HOP_WITDH + YHOP_L */
+
+#define cudaCheckErrors(msg) \
+    do { \
+        cudaError_t __err = cudaGetLastError(); \
+        if (__err != cudaSuccess) { \
+            fprintf(stderr, "Fatal error: %s (%s at %s:%d)\n", \
+                msg, cudaGetErrorString(__err), \
+                __FILE__, __LINE__); \
+            fprintf(stderr, "*** FAILED - ABORTING\n"); \
+            exit(1); \
+        } \
+    } while (0)
+
+/* System parameters. */
+typedef struct
+{
+  long    npart;
+  double  dt;
+  double  hdt;
+  double  rmin;
+  double  rmax;
+  double  v0;
+  double  time;
+  double  eps_pp;
+  double  eps_pw;
+  double  kappa_pp;
+  double  kappa_pw;
+  double  gamma_pp;
+  double  gamma_pw;
+  double  mu_pp;
+  double  mu_pw;
+  double  t_coll;
+  double  tot_mass;
+  double  tilt;
+  double  xhopper;
+  double  Lflume;
+  double  gyr_max;
+  double  fr_fact_pp;
+  double  fr_fact_pw;
+  double  sint;
+  double  cost;
+  double  sintg;
+  double  costg;
+  double  xfunnel;
+  double  dy2;
+  double3 side;
+} system_par;
+
+/* Funnel parameters. */
+typedef struct
+{
+  double sinfi;
+  double cosfi;
+  double tanfi;
+} Funnel;
+
+/* Particle parameters. */
+typedef struct
+{
+  double  radius;
+  double  mass;
+  double  density;
+  double3 moment_of_inertia;
+  double3 rr_a;
+  double3 rr_b;
+  double3 rr_c;
+  double3 rr_d;
+  double3 rrot_a;
+  double3 rrot_b;
+  double3 rrot_c;
+  double3 rrot_d;
+  double3 rr;
+  double3 rrot;
+  double3 vv;
+  double3 ww;
+  double3 Rmatx;
+  double3 Rmaty;
+  double3 Rmatz;
+} particle;
+
+/* Cell system parameters and vectors. */
+typedef struct
+{
+  long    ntags;
+  long    ncell3;
+  long3   ncell;
+  long    ntot;
+  double3 cell_side;
+  double3 cs_inv;
+  double3 rr_max;
+  double3 rr_min;
+  double3 length;
+} cell_par;
+
+/* Declaration of routines */
+/* HOST */
+int    error_check (system_par, char *);
+void   calculate_particle_parameters_hst (system_par, particle *);
+void   cell_locate_hst (cell_par, system_par, particle *, int *, long *);
+void   cell_dim (double3 *, double3 *, particle *, system_par);
+void   clear_cell_hst (cell_par, long *);
+void   clear_forces_hst (system_par, double3 *, double3 *);
+void   clear_ocup_hst (cell_par, int *);
+void   finish_Verlet_hst (double3 *, double3 *, double3 *, double3 *, system_par, particle *);
+void   force_dep_hst (double3 *, double3 *, system_par, particle *);
+void   force_fcorners_hst (double3 *, double3 *, system_par, Funnel, particle *);
+void   force_flume_hst (double3 *, double3 *, system_par, particle *);
+void   force_funnel_hst (double3 *, double3 *, system_par, particle *, Funnel);
+void   force_hop_hst (double3 *, double3 *, system_par, particle *, char);
+void   force_part_hst (double3 *, double3 *, long *, int *, particle *, system_par, cell_par, int);
+void   force_walls_hst (double3 *, double3 *, system_par, particle *);
+void   generate_particles (particle *, system_par);
+void   get_accel_hst (double3 *, double3 *, double3 *, double3 *, system_par, particle *);
+void   init_Verlet_hst (double3 *, double3 *, system_par, particle *);
+void   place_particles (system_par, particle *);
+void   rotate_vectors_hst (particle *, system_par);
+void   set_initial_velocity (system_par, particle *);
+double RAN (long *);
+
+/* DEVICE */
+__global__ void calculate_particle_parameters_dev (system_par, particle *);
+__global__ void cell_locate_dev (cell_par, system_par, particle *, int *, long *);
+__global__ void clear_cell_dev (cell_par, long *);
+__global__ void clear_forces_dev (system_par, double3 *, double3 *);
+__global__ void clear_ocup_dev (cell_par, int *);
+__global__ void finish_Verlet_dev (double3 *, double3 *, double3 *, double3 *, system_par,
+                                   particle *);
+__global__ void force_dep_dev (double3 *, double3 *, system_par, particle *);
+__global__ void force_fcorners_dev (double3 *, double3 *, system_par, Funnel, particle *);
+__global__ void force_flume_dev (double3 *, double3 *, system_par, particle *);
+__global__ void force_funnel_dev (double3 *, double3 *, system_par, particle *, Funnel);
+__global__ void force_hop_dev (double3 *, double3 *, system_par, particle *, char);
+__global__ void force_part_dev (double3 *, double3 *, long *, int *, particle *, system_par,
+                                cell_par, int);
+__global__ void force_walls_dev (double3 *, double3 *, system_par, particle *);
+__global__ void get_accel_dev (double3 *, double3 *, double3 *, double3 *, system_par, particle *);
+__global__ void init_Verlet_dev (double3 *, double3 *, system_par, particle *);
+__global__ void rotate_vectors_dev (particle *, system_par);
